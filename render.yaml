@@ -92,20 +92,9 @@ services:
       # APP_NOW left UNSET so the live deploy uses the real system date.
       # (Set it only if you want to pin the demo clock.)
 
-  # ---- Weekly snapshot refresh (Mondays 06:00 UTC, after the week closes) ----
-  - type: cron
-    name: spi-weekly-refresh
-    runtime: python
-    plan: free
-    rootDir: backend
-    schedule: "0 6 * * 1"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.jobs.weekly_refresh
-    envVars:
-      - fromGroup: spi-secrets
-      - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: spi-dashboard-db
-          property: connectionString
+  # ---- Weekly snapshot refresh ----
+  # Render has no FREE plan for cron jobs, so it's omitted to keep this deploy
+  # at $0. The dashboard still shows live current-week numbers (fetched per
+  # request). To auto-append completed weeks later, either:
+  #   (a) add this back with `type: cron` + `plan: starter` (usage-billed, cents/mo), or
+  #   (b) trigger `python -m app.jobs.weekly_refresh` from any external scheduler.
