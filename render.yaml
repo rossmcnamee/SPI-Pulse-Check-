@@ -1,32 +1,38 @@
-# Render Blueprint — one-click deploy of the SPI Marketing Pulse dashboard.
+# Render Blueprint — the SPI dashboard's DATA ENGINE.
 #
-# Creates three things: a Postgres database, a FastAPI web service, and a weekly
-# cron job that appends the latest completed week from every live source.
+# This deploys ONE free web service: a minimal FastAPI app (app.live_app) that
+# exposes just two public, read-only endpoints the dashboard calls:
+#     GET /api/new-patients   (Cliniko)
+#     GET /api/ad-rows         (Google Ads + Meta + YouTube)
 #
-# Secrets are NEVER in this file. Every credential is declared `sync: false`,
-# which makes Render prompt for it in the dashboard at deploy time (or you set
-# it under the env group). Nothing sensitive is committed to the repo.
+# The dashboard itself (the React UI) is hosted separately on Vercel; Vercel
+# proxies its /api/* requests here via a rewrite, so the browser never talks to
+# Render directly and there's no CORS to manage.
 #
-# After the first deploy, set the values in the "spi-secrets" env group:
-#   TEAM_PASSWORD, CLINIKO_API_KEY, CLINIKO_USER_AGENT,
-#   GOOGLE_ADS_* (6 values), META_* (5 values).
-# SECRET_KEY is generated automatically; DATABASE_URL is wired from the DB.
+# Why Render and not "all on Vercel": the Cliniko crawl takes ~45s, which blows
+# past Vercel's 10s serverless limit. Render runs a persistent server that can
+# absorb it, and an in-process 30-min cache means it runs rarely.
+#
+# No database, no cron, no login here — the heavy full app (app.main) is left
+# out of the deploy on purpose. Stays at $0.
+#
+# Secrets are NEVER in this file. Each credential is `sync: false`, so Render
+# prompts for it in the dashboard at deploy time. Copy the values from your
+# local backend/.env (which is gitignored and never pushed).
 
-databases:
-  - name: spi-dashboard-db
-    databaseName: spi_dashboard
-    user: spi
-    plan: free          # NOTE: Render's free Postgres expires ~30 days; bump to
-                        # "basic-256mb" (or higher) for the live, long-lived deploy.
-
-# Shared env group so the web service and the cron job read identical secrets.
-# fromDatabase / generated values can't live in a group, so those stay per-service.
-envVarGroups:
-  - name: spi-secrets
+services:
+  - type: web
+    name: spi-data-engine
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.live_app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
     envVars:
-      # --- auth ---
-      - key: TEAM_PASSWORD
-        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       # --- per-source live switches (already verified live) ---
       - key: CLINIKO_LIVE
         value: "true"
@@ -36,7 +42,7 @@ envVarGroups:
         value: "true"
       - key: META_LIVE
         value: "true"
-      # --- Cliniko ---
+      # --- Cliniko --- (copy from backend/.env)
       - key: CLINIKO_API_KEY
         sync: false
       - key: CLINIKO_USER_AGENT
@@ -63,38 +69,3 @@ envVarGroups:
         sync: false
       - key: META_SYSTEM_USER_TOKEN
         sync: false
-
-services:
-  # ---- FastAPI web service (serves API + static SPA) ----
-  - type: web
-    name: spi-dashboard
-    runtime: python
-    plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /healthz
-    autoDeploy: true
-    envVars:
-      - fromGroup: spi-secrets
-      - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: spi-dashboard-db
-          property: connectionString
-      - key: SECRET_KEY          # signs the session cookie; generated, never seen
-        generateValue: true
-      - key: COOKIE_SECURE        # behind Render HTTPS
-        value: "true"
-      - key: SESSION_MAX_AGE
-        value: "43200"
-      # APP_NOW left UNSET so the live deploy uses the real system date.
-      # (Set it only if you want to pin the demo clock.)
-
-  # ---- Weekly snapshot refresh ----
-  # Render has no FREE plan for cron jobs, so it's omitted to keep this deploy
-  # at $0. The dashboard still shows live current-week numbers (fetched per
-  # request). To auto-append completed weeks later, either:
-  #   (a) add this back with `type: cron` + `plan: starter` (usage-billed, cents/mo), or
-  #   (b) trigger `python -m app.jobs.weekly_refresh` from any external scheduler.
